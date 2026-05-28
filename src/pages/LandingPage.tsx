@@ -705,7 +705,10 @@ function LandingPage() {
 							<div className="text-xs font-bold uppercase tracking-[0.22em] text-white/40">
 								Your holdings
 							</div>
-							<div className="truncate font-jakarta text-sm font-bold text-white/85">
+							<div
+								className="truncate font-jakarta text-sm font-bold text-white/85"
+								aria-label={`Wallet holdings: ${formatNumber(featuredHoldings)} keys`}
+							>
 								{formatNumber(featuredHoldings)} keys
 							</div>
 						</div>
