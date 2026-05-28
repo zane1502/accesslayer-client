@@ -67,7 +67,7 @@ export const appendUtmParams = (
 
 		// Preserve hash and other parts — URL.toString() keeps them
 		return url.toString();
-	} catch (e) {
+	} catch {
 		// If URL parsing fails, fall back to original input
 		return inputUrl;
 	}
