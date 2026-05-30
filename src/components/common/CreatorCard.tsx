@@ -40,6 +40,7 @@ import CreatorListRowDivider from '@/components/common/CreatorListRowDivider';
 import BuyActionHelperText from '@/components/common/BuyActionHelperText';
 import NetworkFeeHint from '@/components/common/NetworkFeeHint';
 import CreatorBio from '@/components/common/CreatorBio';
+import CreatorDropCountdown from '@/components/common/CreatorDropCountdown';
 import CreatorHandleHoverCard from '@/components/common/CreatorHandleHoverCard';
 import { CREATOR_CARD_MEDIA_RADIUS_CLASS } from '@/utils/creatorCardTokens';
 
