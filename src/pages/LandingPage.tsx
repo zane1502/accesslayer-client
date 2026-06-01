@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutGroup, motion } from 'framer-motion';
-import { useSearchParams } from 'react-router';
 import { courseService, type Course } from '@/services/course.service';
 import SkipToContent from '@/components/common/SkipToContent';
 import { cn } from '@/lib/utils';
@@ -344,7 +343,7 @@ function LandingPage() {
 			newParams.delete('sort');
 		}
 		setSearchParams(newParams, { replace: true });
-	}, [searchQuery, sortOption, searchParams, setSearchParams]);
+	}, [searchQuery, sortOption]);
 
 	useEffect(() => {
 		const q = searchParams.get('q');
@@ -359,7 +358,7 @@ function LandingPage() {
 		} else if (sort === null && sortOptionRef.current !== 'featured') {
 			setSortOption('featured');
 		}
-	}, [searchParams]);
+	}, []);
 
 	useEffect(() => {
 		if (typeof window === 'undefined') return;
