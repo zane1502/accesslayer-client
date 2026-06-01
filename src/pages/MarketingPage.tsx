@@ -3,8 +3,6 @@ export default function MarketingPage() {
 		<div className="relative min-h-screen overflow-hidden bg-[#04090f] text-white">
 			{/* Background glow */}
 			<div className="pointer-events-none absolute inset-0">
-				<div className="absolute left-[-6rem] top-[8%] size-96 rounded-full bg-blue-600/10 blur-3xl" />
-				<div className="absolute bottom-[10%] right-[-4rem] size-80 rounded-full bg-blue-500/8 blur-3xl" />
 				<div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.07),transparent_50%)]" />
 			</div>
 
