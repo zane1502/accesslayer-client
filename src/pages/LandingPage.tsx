@@ -8,6 +8,7 @@ import StickyFilterBar from '@/components/common/StickyFilterBar';
 import CreatorCard from '@/components/common/CreatorCard';
 import {
 	CreatorGridSkeleton,
+	CreatorHoldingsListSkeleton,
 	CreatorProfileHeaderSkeleton,
 } from '@/components/common/CreatorSkeleton';
 import EmptyState from '@/components/common/EmptyState';
@@ -29,9 +30,12 @@ import EmptyTransactionTimelineState from '@/components/common/EmptyTransactionT
 import TradeDialog, { type TradeSide } from '@/components/common/TradeDialog';
 import NetworkMismatchBanner from '@/components/common/NetworkMismatchBanner';
 import StellarConnectionQualityBadge from '@/components/common/StellarConnectionQualityBadge';
+import { useEthersProvider } from '@/hooks/useEthersProvider';
 import { useNetworkMismatch } from '@/hooks/useNetworkMismatch';
 import showToast from '@/utils/toast.util';
+import { getSignatureErrorMessage } from '@/utils/errorHandling.utils';
 import { formatCompactNumber, formatNumber } from '@/utils/numberFormat.utils';
+import { formatOwnershipPercent } from '@/utils/ownership.utils';
 import PrecisionModeToggle, {
 	type PrecisionMode,
 } from '@/components/common/PrecisionModeToggle';
@@ -44,12 +48,22 @@ import {
 	CREATOR_CARD_ENTRY_CLASS,
 	creatorCardEntryStyle,
 } from '@/utils/cardEntryAnimation.utils';
-import { resolveCreatorKeyPriceStroops } from '@/utils/keyPriceDisplay.utils';
+import {
+	formatDisplayKeyPrice,
+	resolveCreatorKeyPriceStroops,
+} from '@/utils/keyPriceDisplay.utils';
+import {
+	calculatePortfolioValue,
+	formatPortfolioValueDisplay,
+	getPortfolioValueHelperText,
+} from '@/utils/portfolioValue.utils';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import { CREATOR_LIST_SORT_LAYOUT_TRANSITION } from '@/utils/creatorListSortTransition';
 import { AlertCircle, ChevronDown, RefreshCw } from 'lucide-react';
 import ClearedFiltersEmptyState from '@/components/common/ClearedFiltersEmptyState';
 import CreatorListPagination from '@/components/common/CreatorListPagination';
+import CreatorListGroupSeparator from '@/components/common/CreatorListGroupSeparator';
+import MarketplaceSidebar from '@/components/common/MarketplaceSidebar';
 
 const FEATURED_CREATOR_FACTS = [
 	{ label: 'Membership', value: 'Collectors Circle' },
@@ -97,6 +111,7 @@ const DEMO_CREATORS: Course[] = [
 		category: 'Art',
 		level: 'BEGINNER',
 		isVerified: true,
+		isPinned: true,
 		thumbnail:
 			'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop',
 	},
@@ -111,6 +126,7 @@ const DEMO_CREATORS: Course[] = [
 		category: 'Tech',
 		level: 'ADVANCED',
 		isVerified: true,
+		isPinned: true,
 		thumbnail:
 			'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400&h=400&fit=crop',
 	},
@@ -177,6 +193,7 @@ const MAX_CREATOR_FETCH_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 800;
 const PAGE_SIZE = 6;
 const FETCH_RETRY_ACTION_LABEL = 'Try again';
+const DEMO_HELD_KEY_QUANTITIES = [0, 2, 1] as const;
 const FINAL_FETCH_ERROR_COPY =
 	'Unable to load live creators right now. Showing fallback creators.';
 
@@ -230,7 +247,9 @@ function LandingPage() {
 	// Last successful fetch timestamp (#301). `null` means we've never
 	// resolved a load yet — the staleness helper treats that as "stale"
 	// so the warning surfaces if the load hangs.
-	const [creatorsFetchedAt, setCreatorsFetchedAt] = useState<number | null>(null);
+	const [creatorsFetchedAt, setCreatorsFetchedAt] = useState<number | null>(
+		null
+	);
 	const { isMismatch: isNetworkMismatch } = useNetworkMismatch();
 	const [isLoading, setIsLoading] = useState(true);
 	const [isFilterLoading, setIsFilterLoading] = useState(false);
@@ -246,6 +265,7 @@ function LandingPage() {
 	const [tradeSide, setTradeSide] = useState<TradeSide>('buy');
 	const [tradeDialogOpen, setTradeDialogOpen] = useState(false);
 	const [tradeSubmitting, setTradeSubmitting] = useState(false);
+	const tradeFeeEstimateProvider = useEthersProvider();
 	const prefersReducedMotion = usePrefersReducedMotion();
 	const [sortOption, setSortOption] = useState<SortOption>(() => {
 		if (typeof window === 'undefined') return 'featured';
@@ -451,6 +471,11 @@ function LandingPage() {
 		FEATURED_CREATOR_KEY_HOLDER_COUNT
 	);
 
+	// Choose the featured creator from live data when available, otherwise
+	// fall back to the demo featured creator. This keeps the profile panel
+	// reactive to backend updates (supply, price, etc.).
+	const featuredCreator = creators.length > 0 ? creators[0] : DEMO_CREATORS[0];
+
 	useEffect(() => {
 		if (pendingScrollRestoreRef.current == null) return;
 		const target = pendingScrollRestoreRef.current;
@@ -483,6 +508,39 @@ function LandingPage() {
 			thresholdMs: 60_000,
 			onStale: handleRetryCreatorFetch,
 		}
+	);
+
+	const heldKeyPositions = useMemo(
+		() =>
+			creators.map((creator, index) => ({
+				creatorId: creator.id,
+				quantity:
+					index === 0
+						? featuredHoldings
+						: (DEMO_HELD_KEY_QUANTITIES[index] ?? 0),
+				priceStroops: creator.priceStroops,
+				price: creator.price,
+				isPriceLoading: isPriceRefreshing,
+				isPriceStale: creatorsAreStale,
+			})),
+		[creators, creatorsAreStale, featuredHoldings, isPriceRefreshing]
+	);
+	const portfolioValue = useMemo(
+		() => calculatePortfolioValue(heldKeyPositions),
+		[heldKeyPositions]
+	);
+	const displayedPortfolioValue = isLoading
+		? {
+				...portfolioValue,
+				status: 'loading' as const,
+				totalStroops: null,
+			}
+		: portfolioValue;
+	const portfolioValueDisplay = formatPortfolioValueDisplay(
+		displayedPortfolioValue
+	);
+	const portfolioValueHelperText = getPortfolioValueHelperText(
+		displayedPortfolioValue
 	);
 
 	const openTradeDialog = (side: TradeSide) => {
@@ -518,9 +576,9 @@ function LandingPage() {
 					: `Holdings refreshed: -${formatNumber(amount)} keys.`
 			);
 			setTradeDialogOpen(false);
-		} catch {
+		} catch (error) {
 			setFeaturedHoldings(previousHoldings);
-			showToast.error('Trade failed. Holdings have been restored.');
+			showToast.error(getSignatureErrorMessage(error));
 		} finally {
 			setTradeSubmitting(false);
 		}
@@ -528,7 +586,10 @@ function LandingPage() {
 
 	return (
 		<div className="relative min-h-screen overflow-x-hidden bg-[linear-gradient(160deg,#08111f_0%,#10213b_45%,#f0b14d_160%)] px-6 pt-12 pb-28 md:px-12 md:pb-12">
-			<SkipToContent targetId="main-creator-list" label="Skip to creator list" />
+			<SkipToContent
+				targetId="main-creator-list"
+				label="Skip to creator list"
+			/>
 			{/* #306: the outer wrapper is just a decorative shell; the actual
 			    landmark structure is a top-level <header> sibling of the <main>
 			    below, so screen-reader landmark navigation lands directly on the
@@ -536,6 +597,7 @@ function LandingPage() {
 			<div className="absolute left-[-4rem] top-[10%] size-72 rounded-full bg-amber-300/20 blur-[100px]" />
 			<div className="absolute bottom-[8%] right-[-3rem] size-72 rounded-full bg-emerald-300/15 blur-[100px]" />
 			<div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,186,73,0.1),transparent_40%),radial-gradient(circle_at_bottom_left,rgba(74,222,128,0.08),transparent_35%)]" />
+			<MarketplaceSidebar />
 			<div className="relative z-10 mx-auto max-w-7xl">
 				<MarketplaceSection
 					as="header"
@@ -573,322 +635,571 @@ function LandingPage() {
 					<SectionDivider title="Discover creators" spacing="relaxed" />
 
 					<StickyFilterBar
-					eyebrow="Marketplace filters"
-					title="Find creators without losing your place"
-					description="Search by creator name or handle while you keep scrolling through the marketplace. The filter shell stays visible and compact so you can refine results without losing your place."
-					resultCount={filteredCreators.length}
-					onReset={handleResetSearch}
-					showReset={searchQuery.length > 0}
-				>
-					<div className="space-y-3">
-						<SearchBar
-							value={searchQuery}
-							onChange={setSearchQuery}
-							validationMessage={searchValidationMessage}
-							isLoading={isLoading}
-							className="max-w-none shadow-2xl shadow-black/20"
-						/>
-						<div className="flex items-center gap-3">
-							<label
-								htmlFor="creator-sort"
-								className="marketplace-label-muted text-xs font-semibold uppercase tracking-[0.16em]"
-							>
-								Sort
-							</label>
-							<select
-								id="creator-sort"
-								value={sortOption}
-								onChange={e =>
-									setSortOption(e.target.value as SortOption)
-								}
-								className="h-9 rounded-lg border border-white/15 bg-slate-950/80 px-3 text-sm text-white outline-none focus:border-amber-400/60"
-							>
-								<option value="featured">Featured</option>
-								<option value="price-asc">Price: Low to high</option>
-								<option value="price-desc">Price: High to low</option>
-								<option value="supply-desc">Supply: High to low</option>
-							</select>
-						</div>
-					</div>
-				</StickyFilterBar>
-
-				<SectionDivider title="Marketplace results" spacing="default" />
-
-				<SectionErrorBoundary sectionName="Creator List" minHeight={400}>
-				<MarketplaceSection id="main-creator-list" tabIndex={-1}>
-						<SectionHeading
-							title="Explore creators"
-							supportingText="Discover creator profiles and marketplace listings."
-							className="mb-7"
-							supportingTextClassName="max-w-3xl"
-						/>
-
-						{isLoading ? (
-							<CreatorGridSkeleton count={6} />
-						) : isFilterLoading ? (
-							<div className="space-y-4">
-								<div className="flex items-center justify-center gap-2 py-8">
-									<div className="size-4 animate-spin rounded-full border-2 border-amber-400/20 border-t-amber-400" />
-									<span className="text-sm text-white/60">
-										Updating results...
-									</span>
-								</div>
-								<div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 opacity-50">
-									{pagedCreators.map(creator => (
-										<CreatorCard key={creator.id} creator={creator} isPriceRefreshing={isPriceRefreshing} />
-									))}
-								</div>
+						eyebrow="Marketplace filters"
+						title="Find creators without losing your place"
+						description="Search by creator name or handle while you keep scrolling through the marketplace. The filter shell stays visible and compact so you can refine results without losing your place."
+						resultCount={filteredCreators.length}
+						onReset={handleResetSearch}
+						showReset={searchQuery.length > 0}
+					>
+						<div className="space-y-3">
+							<SearchBar
+								value={searchQuery}
+								onChange={setSearchQuery}
+								validationMessage={searchValidationMessage}
+								isLoading={isLoading}
+								className="max-w-none shadow-2xl shadow-black/20"
+							/>
+							<div className="flex items-center gap-3">
+								<label
+									htmlFor="creator-sort"
+									className="marketplace-label-muted text-xs font-semibold uppercase tracking-[0.16em]"
+								>
+									Sort
+								</label>
+								<select
+									id="creator-sort"
+									value={sortOption}
+									onChange={e =>
+										setSortOption(e.target.value as SortOption)
+									}
+									className="h-9 rounded-lg border border-white/15 bg-slate-950/80 px-3 text-sm text-white outline-none focus:border-amber-400/60"
+								>
+									<option value="featured">Featured</option>
+									<option value="price-asc">Price: Low to high</option>
+									<option value="price-desc">
+										Price: High to low
+									</option>
+									<option value="supply-desc">
+										Supply: High to low
+									</option>
+								</select>
 							</div>
-						) : filteredCreators.length > 0 ? (
-							<div className="space-y-4">
-								{showRetryBanner && (
-									<TransactionRetryNotice
-										title="Loading live creators"
-										message={getFetchRetryHelperCopy(
-											fetchRetryAttempt + 1,
-											MAX_CREATOR_FETCH_RETRIES + 1
-										)}
-										retryLabel={FETCH_RETRY_ACTION_LABEL}
-										onRetry={handleRetryCreatorFetch}
-									/>
-								)}
-								{finalFetchError && (
-									<div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-										{finalFetchError}
+						</div>
+					</StickyFilterBar>
+
+					<SectionDivider title="Marketplace results" spacing="default" />
+
+					<SectionErrorBoundary sectionName="Creator List" minHeight={400}>
+						<MarketplaceSection id="main-creator-list" tabIndex={-1}>
+							<SectionHeading
+								title="Explore creators"
+								supportingText="Discover creator profiles and marketplace listings."
+								className="mb-7"
+								supportingTextClassName="max-w-3xl"
+							/>
+
+							{isLoading ? (
+								<CreatorGridSkeleton count={6} />
+							) : isFilterLoading ? (
+								<div className="space-y-4">
+									<div className="flex items-center justify-center gap-2 py-8">
+										<div className="size-4 animate-spin rounded-full border-2 border-amber-400/20 border-t-amber-400" />
+										<span className="text-sm text-white/60">
+											Updating results...
+										</span>
 									</div>
-								)}
-								{/* #301: subtle inline stale-data warning that
+									<div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 opacity-50">
+										{pagedCreators.map(creator => (
+											<CreatorCard
+												key={creator.id}
+												creator={creator}
+												isPriceRefreshing={isPriceRefreshing}
+											/>
+										))}
+									</div>
+								</div>
+							) : filteredCreators.length > 0 ? (
+								<div className="space-y-4">
+									{showRetryBanner && (
+										<TransactionRetryNotice
+											title="Loading live creators"
+											message={getFetchRetryHelperCopy(
+												fetchRetryAttempt + 1,
+												MAX_CREATOR_FETCH_RETRIES + 1
+											)}
+											retryLabel={FETCH_RETRY_ACTION_LABEL}
+											onRetry={handleRetryCreatorFetch}
+										/>
+									)}
+									{finalFetchError && (
+										<div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+											{finalFetchError}
+										</div>
+									)}
+									{/* #301: subtle inline stale-data warning that
 									appears once the cached creator data is past
 									the 60s freshness window. The hook drives a
 									background refresh that resets the baseline
 									and clears the warning automatically. */}
-								{creatorsAreStale && (
-									<StaleDataWarning
-										stale={creatorsAreStale}
-										ageMs={creatorsAgeMs}
-										className="self-start"
+									{creatorsAreStale && (
+										<StaleDataWarning
+											stale={creatorsAreStale}
+											ageMs={creatorsAgeMs}
+											className="self-start"
+										/>
+									)}
+									<LayoutGroup>
+										<div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
+											{/* Render pinned creators first */}
+											{pagedCreators
+												.filter(creator => creator.isPinned)
+												.map((creator, index) => (
+													// #300: staggered entry animation; the
+													// helper no-ops on prefers-reduced-motion.
+													// #355: layout transition when sort order changes.
+													<motion.div
+														key={creator.id}
+														layout={!prefersReducedMotion}
+														transition={
+															CREATOR_LIST_SORT_LAYOUT_TRANSITION
+														}
+														className={CREATOR_CARD_ENTRY_CLASS}
+														style={creatorCardEntryStyle(index, {
+															prefersReducedMotion,
+														})}
+													>
+														<CreatorCard
+															creator={creator}
+															isPriceRefreshing={isPriceRefreshing}
+														/>
+													</motion.div>
+												))}
+
+											{/* Separator between pinned and unpinned */}
+											{pagedCreators.some(creator => creator.isPinned) &&
+												pagedCreators.some(creator => !creator.isPinned) && (
+													<CreatorListGroupSeparator label="Other creators" />
+												)}
+
+											{/* Render unpinned creators */}
+											{pagedCreators
+												.filter(creator => !creator.isPinned)
+												.map((creator, index) => (
+													<motion.div
+														key={creator.id}
+														layout={!prefersReducedMotion}
+														transition={
+															CREATOR_LIST_SORT_LAYOUT_TRANSITION
+														}
+														className={CREATOR_CARD_ENTRY_CLASS}
+														style={creatorCardEntryStyle(index, {
+															prefersReducedMotion,
+														})}
+													>
+														<CreatorCard
+															creator={creator}
+															isPriceRefreshing={isPriceRefreshing}
+														/>
+													</motion.div>
+												))}
+										</div>
+									</LayoutGroup>
+									<CreatorListPagination
+										page={safePage}
+										totalPages={totalPages}
+										onPageChange={handlePageChange}
+										className="mt-8"
 									/>
-								)}
-								<LayoutGroup>
-									<div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
-										{pagedCreators.map((creator, index) => (
-											// #300: staggered entry animation; the
-											// helper no-ops on prefers-reduced-motion.
-											// #355: layout transition when sort order changes.
-											<motion.div
-												key={creator.id}
-												layout={!prefersReducedMotion}
-												transition={
-													CREATOR_LIST_SORT_LAYOUT_TRANSITION
+									{safePage < totalPages - 1 && (
+										<div className="mt-4 flex justify-center">
+											<Button
+												type="button"
+												variant="outline"
+												onClick={() =>
+													handlePageChange(safePage + 1)
 												}
-												className={CREATOR_CARD_ENTRY_CLASS}
-												style={creatorCardEntryStyle(index, {
-													prefersReducedMotion,
-												})}
+												aria-label="Load more creators"
+												className="sr-only rounded-full border-white/10 bg-white/5 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white shadow-none focus:not-sr-only focus:flex focus:items-center focus:gap-2 focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:ring-offset-2 focus:ring-offset-slate-950"
 											>
-												<CreatorCard
-													creator={creator}
-													isPriceRefreshing={isPriceRefreshing}
+												<ChevronDown
+													className="size-4"
+													aria-hidden="true"
 												/>
-											</motion.div>
-										))}
-									</div>
-								</LayoutGroup>
-								<CreatorListPagination
-									page={safePage}
-									totalPages={totalPages}
-									onPageChange={handlePageChange}
-									className="mt-8"
-								/>
-								{safePage < totalPages - 1 && (
-									<div className="mt-4 flex justify-center">
-										<Button
-											type="button"
-											variant="outline"
-											onClick={() => handlePageChange(safePage + 1)}
-											aria-label="Load more creators"
-											className="sr-only rounded-full border-white/10 bg-white/5 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white shadow-none focus:not-sr-only focus:flex focus:items-center focus:gap-2 focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:ring-offset-2 focus:ring-offset-slate-950"
-										>
-											<ChevronDown className="size-4" aria-hidden="true" />
-											Load more creators
-										</Button>
-									</div>
-								)}
+												Load more creators
+											</Button>
+										</div>
+									)}
 									{safePage >= totalPages - 1 && (
 										<p
-										role="status"
-										aria-live="polite"
-										className="mt-4 text-center text-xs font-semibold uppercase tracking-[0.18em] text-white/45"
-									>
-										{`You've reached the end — ${formatNumber(filteredCreators.length)} creator${filteredCreators.length === 1 ? '' : 's'} shown.`}
-									</p>
-								)}
-							</div>
-						) : (
-							<div className="flex flex-col items-center gap-6 py-12">
-								{trimmedSearchQuery.length === 0 ? (
-									<ClearedFiltersEmptyState
-										onBrowseAll={handleResetSearch}
-										className="w-full max-w-xl"
-									/>
-								) : (
-									<>
-										<EmptyState
-											image="/images/no-results.png"
-											title="No creators found"
-											description={`We couldn't find any creators matching "${searchQuery}". Try a different name or handle.`}
-											onReset={handleResetSearch}
+											role="status"
+											aria-live="polite"
+											className="mt-4 text-center text-xs font-semibold uppercase tracking-[0.18em] text-white/45"
+										>
+											{`You've reached the end — ${formatNumber(filteredCreators.length)} creator${filteredCreators.length === 1 ? '' : 's'} shown.`}
+										</p>
+									)}
+								</div>
+							) : (
+								<div className="flex flex-col items-center gap-6 py-12">
+									{trimmedSearchQuery.length === 0 ? (
+										<ClearedFiltersEmptyState
+											onBrowseAll={handleResetSearch}
+											className="w-full max-w-xl"
 										/>
-										{!hasInvalidSearchInput && (
-											<EmptySearchSuggestions
-												className="w-full max-w-xl"
-												suggestions={searchSuggestions}
-												onSelect={setSearchQuery}
+									) : (
+										<>
+											<EmptyState
+												image="/images/no-results.png"
+												title="No creators found"
+												description={`We couldn't find any creators matching "${searchQuery}". Try a different name or handle.`}
+												onReset={handleResetSearch}
 											/>
-										)}
-									</>
-								)}
+											{!hasInvalidSearchInput && (
+												<EmptySearchSuggestions
+													className="w-full max-w-xl"
+													suggestions={searchSuggestions}
+													onSelect={setSearchQuery}
+												/>
+											)}
+										</>
+									)}
+								</div>
+							)}
+						</MarketplaceSection>
+					</SectionErrorBoundary>
+
+					<SectionDivider title="Holdings overview" spacing="relaxed" />
+					<MarketplaceSection
+						aria-labelledby="holdings-overview-heading"
+						spacing="default"
+						className="marketplace-card-surface rounded-[2rem] border p-6 shadow-[0_24px_80px_-60px_rgba(8,17,31,0.95)] backdrop-blur-sm md:p-8"
+					>
+						<div className="grid gap-6 md:grid-cols-[1fr_auto] md:items-center">
+							<div>
+								<p className="mb-2 text-xs font-bold uppercase tracking-[0.24em] text-amber-300/80">
+									Your holdings
+								</p>
+								<h2
+									id="holdings-overview-heading"
+									className="font-grotesque text-2xl font-black tracking-tight text-white"
+								>
+									Total portfolio value
+								</h2>
+								<p className="mt-2 max-w-2xl font-jakarta text-sm leading-relaxed text-white/60">
+									Aggregates every creator key position currently held
+									by this wallet using the latest available key prices.
+								</p>
+							</div>
+							<div
+								role="status"
+								aria-live="polite"
+								aria-busy={
+									displayedPortfolioValue.status === 'loading' ||
+									undefined
+								}
+								className="rounded-2xl border border-white/10 bg-slate-950/45 px-5 py-4 text-left md:min-w-64"
+							>
+								<div className="text-[0.65rem] font-bold uppercase tracking-[0.2em] text-white/45">
+									Portfolio total
+								</div>
+								<div className="mt-1 flex items-center gap-2 font-grotesque text-3xl font-black text-white">
+									{displayedPortfolioValue.status === 'loading' && (
+										<span
+											className="size-4 animate-spin rounded-full border-2 border-amber-400/25 border-t-amber-400"
+											aria-hidden="true"
+										/>
+									)}
+									{portfolioValueDisplay}
+								</div>
+								<p className="mt-2 text-xs leading-relaxed text-white/55">
+									{portfolioValueHelperText}
+								</p>
+							</div>
+						</div>
+						{isLoading ? (
+							<CreatorHoldingsListSkeleton className="mt-6" />
+						) : (
+							<div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+								{heldKeyPositions
+									.filter(
+										position =>
+											position.quantity && position.quantity > 0
+									)
+									.map(position => {
+										const creator = creators.find(
+											item => item.id === position.creatorId
+										);
+										return (
+											<div
+												key={position.creatorId}
+												className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"
+											>
+												<div className="truncate text-sm font-bold text-white">
+													{creator?.title ?? 'Unknown creator'}
+												</div>
+												<div className="mt-1 text-xs text-white/55">
+													{formatNumber(position.quantity)} keys ·{' '}
+													{position.isPriceLoading
+														? 'Refreshing price'
+														: position.isPriceStale
+															? 'Price stale'
+															: formatDisplayKeyPrice(
+																	resolveCreatorKeyPriceStroops(
+																		position
+																	)
+																)}
+												</div>
+											</div>
+										);
+									})}
 							</div>
 						)}
 					</MarketplaceSection>
-				</SectionErrorBoundary>
 
-				<SectionDivider title="Creator profile pattern" spacing="relaxed" />
-
-				<div className="mb-8 space-y-6">
-					<CreatorBreadcrumb
-						parentLabel="Marketplace"
-						parentHref="/"
-						currentLabel="Alex Rivers Portfolio"
+					<SectionDivider
+						title="Creator profile pattern"
+						spacing="relaxed"
 					/>
-					<SectionErrorBoundary
-						sectionName="Creator Header"
-						minHeight={150}
-					>
-						{isLoading ? (
-							<CreatorProfileHeaderSkeleton />
-						) : (
-							<CreatorProfileHeader
-								name="Alex Rivers"
-								handle="arivers"
-								creatorId="arivers"
-								isVerified={true}
-								avatarUrl="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop"
-							/>
-						)}
-					</SectionErrorBoundary>
-				</div>
 
-				<SectionErrorBoundary sectionName="Creator Profile" minHeight={300}>
-					{finalFetchError ? (
-						<CreatorProfileLoadError
-							onRetry={handleRetryCreatorFetch}
-							isRetrying={isLoading}
+					<div className="mb-8 space-y-6">
+						<CreatorBreadcrumb
+							parentLabel="Marketplace"
+							parentHref="/"
+							currentLabel="Alex Rivers Portfolio"
 						/>
-					) : (
-						<MarketplaceSection
-							spacing="relaxed"
-							className="marketplace-card-surface grid gap-8 rounded-[2rem] border p-6 shadow-[0_24px_80px_-60px_rgba(8,17,31,0.95)] backdrop-blur-sm md:p-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-start"
+						<SectionErrorBoundary
+							sectionName="Creator Header"
+							minHeight={150}
 						>
-							<div>
-								<SectionHeading
-									eyebrow="Profile spotlight"
-									title="A reusable profile facts layout for featured creators"
-									className="mb-4"
+							{isLoading ? (
+								<CreatorProfileHeaderSkeleton />
+							) : (
+								<CreatorProfileHeader
+									name="Alex Rivers"
+									handle="arivers"
+									creatorId="arivers"
+									isVerified={true}
+									avatarUrl="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop"
 								/>
-								<ProfileTabPillGroup
-									tabs={[
-										{ label: 'Overview', value: 'overview' },
-										{ label: 'Creations', value: 'creations' },
-										{ label: 'Collectors', value: 'collectors' },
-										{ label: 'Activity', value: 'activity' },
-									]}
-									activeTab={activeProfileTab}
-									onTabChange={setActiveProfileTab}
-									enableHashRouting
-									className="mb-4"
-								/>
-								<CompactSectionSubtitle className="max-w-xl">
-									Use the same subtitle pattern beneath headings, then
-									drop repeated creator facts into one responsive grid
-									that stays tidy on mobile and desktop.
-								</CompactSectionSubtitle>
-								<div
-									id={`profile-panel-${activeProfileTab}`}
-									role="tabpanel"
-									aria-labelledby={`profile-tab-${activeProfileTab}`}
-									tabIndex={0}
-								>
-									<div className="mt-5 flex flex-wrap gap-2">
-										<MiniStatChip
-											label="Status"
-											value="Verified creator"
-											explanation="Creator has completed identity verification with Access Layer."
-										/>
-										<MiniStatChip
-											label="Audience"
-											value={featuredCreatorKeyHolderCopy.value}
-											explanation={featuredCreatorKeyHolderCopy.explanation}
-										/>
-										<MiniStatChip
-											label="Access"
-											value="Member-first drops"
-											explanation="Key holders see new drops a window before the public marketplace."
-										/>
+							)}
+						</SectionErrorBoundary>
+					</div>
+
+					<SectionErrorBoundary
+						sectionName="Creator Profile"
+						minHeight={300}
+					>
+						{finalFetchError ? (
+							<CreatorProfileLoadError
+								onRetry={handleRetryCreatorFetch}
+								isRetrying={isLoading}
+							/>
+						) : (
+							<MarketplaceSection
+								spacing="relaxed"
+								className="marketplace-card-surface grid gap-8 rounded-[2rem] border p-6 shadow-[0_24px_80px_-60px_rgba(8,17,31,0.95)] backdrop-blur-sm md:p-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-start"
+							>
+								<div>
+									<SectionHeading
+										eyebrow="Profile spotlight"
+										title="A reusable profile facts layout for featured creators"
+										className="mb-4"
+									/>
+									<ProfileTabPillGroup
+										tabs={[
+											{ label: 'Overview', value: 'overview' },
+											{ label: 'Creations', value: 'creations' },
+											{ label: 'Collectors', value: 'collectors' },
+											{ label: 'Activity', value: 'activity' },
+										]}
+										activeTab={activeProfileTab}
+										onTabChange={setActiveProfileTab}
+										enableHashRouting
+										className="mb-4"
+									/>
+									<CompactSectionSubtitle className="max-w-xl">
+										Use the same subtitle pattern beneath headings,
+										then drop repeated creator facts into one
+										responsive grid that stays tidy on mobile and
+										desktop.
+									</CompactSectionSubtitle>
+									<div
+										id={`profile-panel-${activeProfileTab}`}
+										role="tabpanel"
+										aria-labelledby={`profile-tab-${activeProfileTab}`}
+										tabIndex={0}
+									>
+										<div className="mt-5 flex flex-wrap gap-2">
+											<MiniStatChip
+												label="Status"
+												value="Verified creator"
+												explanation="Creator has completed identity verification with Access Layer."
+											/>
+											<MiniStatChip
+												label="Audience"
+												value={featuredCreatorKeyHolderCopy.value}
+												explanation={
+													featuredCreatorKeyHolderCopy.explanation
+												}
+											/>
+											<MiniStatChip
+												label="Access"
+												value="Member-first drops"
+												explanation="Key holders see new drops a window before the public marketplace."
+											/>
+										</div>
 									</div>
 								</div>
-							</div>
-							<div className="space-y-3">
-								<CreatorProfileInfoGrid
-									items={[
-										...FEATURED_CREATOR_FACTS,
-										{
-											label: 'Followers',
-											value:
-												FEATURED_CREATOR_FOLLOWER_COUNT != null
-													? formatCompactNumber(
-															FEATURED_CREATOR_FOLLOWER_COUNT
-														)
-													: 'Not available',
-											helperText:
-												FEATURED_CREATOR_FOLLOWER_COUNT != null
-													? undefined
-													: 'Follower count not available yet.',
-										},
-										{
-											label: 'Your holdings',
-											value: `${formatNumber(featuredHoldings)} keys`,
-										},
-									]}
-								/>
-								<div className="flex items-center justify-between gap-2">
-									<span className="text-[0.65rem] font-bold uppercase tracking-[0.22em] text-white/40">
-										Metrics display
-									</span>
-									<PrecisionModeToggle
-										mode={precisionMode}
-										onChange={setPrecisionMode}
+								<div className="space-y-3">
+									<CreatorProfileInfoGrid
+										items={[
+											...FEATURED_CREATOR_FACTS,
+											{
+												label: 'Followers',
+												value:
+													FEATURED_CREATOR_FOLLOWER_COUNT != null
+														? formatCompactNumber(
+																FEATURED_CREATOR_FOLLOWER_COUNT
+															)
+														: 'Not available',
+												helperText:
+													FEATURED_CREATOR_FOLLOWER_COUNT != null
+														? undefined
+														: 'Follower count not available yet.',
+											},
+											{
+												label: 'Your holdings',
+												value: `${formatNumber(featuredHoldings)} keys${
+													formatOwnershipPercent(
+														featuredHoldings,
+														featuredCreator?.creatorShareSupply,
+														{
+															maximumFractionDigits:
+																precisionMode === 'compact'
+																	? 1
+																	: 2,
+														}
+													) !== '—'
+														? ` (${formatOwnershipPercent(
+																featuredHoldings,
+																featuredCreator?.creatorShareSupply,
+																{
+																	maximumFractionDigits:
+																		precisionMode ===
+																		'compact'
+																			? 1
+																			: 2,
+																}
+															)})`
+														: ''
+												}`,
+											},
+										]}
 									/>
+									<div className="flex items-center justify-between gap-2">
+										<span className="text-[0.65rem] font-bold uppercase tracking-[0.22em] text-white/40">
+											Metrics display
+										</span>
+										<PrecisionModeToggle
+											mode={precisionMode}
+											onChange={setPrecisionMode}
+										/>
+									</div>
+									<CreatorLabeledStatRow
+										label="Creator Share Supply"
+										value={
+											precisionMode === 'compact'
+												? `${formatCompactNumber(
+														featuredCreator?.creatorShareSupply
+													)} shares available`
+												: `${formatNumber(
+														featuredCreator?.creatorShareSupply
+													)} shares available`
+										}
+									/>
+									{isNetworkMismatch && <NetworkMismatchBanner />}
+									<div className="relative">
+										<div
+											className={cn(
+												'hidden md:flex items-center gap-3 transition-opacity duration-200',
+												tradeSubmitting &&
+													'pointer-events-none select-none opacity-60'
+											)}
+											aria-busy={tradeSubmitting || undefined}
+										>
+											<Button
+												className="rounded-xl"
+												onClick={() => openTradeDialog('buy')}
+												disabled={
+													isNetworkMismatch || tradeSubmitting
+												}
+											>
+												Buy
+											</Button>
+											<Button
+												className="rounded-xl"
+												variant="outline"
+												onClick={() => openTradeDialog('sell')}
+												disabled={
+													isNetworkMismatch || tradeSubmitting
+												}
+											>
+												Sell
+											</Button>
+										</div>
+										{tradeSubmitting && (
+											<div className="absolute inset-0 hidden items-center justify-center rounded-[1.25rem] border border-white/10 bg-slate-950/65 backdrop-blur-sm md:flex">
+												<div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-1.5 text-xs font-bold text-white/85 shadow-lg">
+													<div className="size-3.5 animate-spin rounded-full border-2 border-amber-400/25 border-t-amber-400" />
+													Submitting trade
+												</div>
+											</div>
+										)}
+									</div>
 								</div>
-								<CreatorLabeledStatRow
-									label="Creator Share Supply"
-									value={
-										precisionMode === 'compact'
-											? `${formatCompactNumber(250)} shares available`
-											: `${formatNumber(250)} shares available`
-									}
-								/>
-								{isNetworkMismatch && <NetworkMismatchBanner />}
+							</MarketplaceSection>
+						)}
+					</SectionErrorBoundary>
+
+					<div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/85 backdrop-blur-md md:hidden">
+						<div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-3">
+							<div className="min-w-0">
+								<div className="text-xs font-bold uppercase tracking-[0.22em] text-white/40">
+									Your holdings
+								</div>
+								<div
+									className="truncate font-jakarta text-sm font-bold text-white/85"
+									aria-label={`Wallet holdings: ${formatNumber(
+										featuredHoldings
+									)} keys${
+										formatOwnershipPercent(
+											featuredHoldings,
+											featuredCreator?.creatorShareSupply
+										) !== '—'
+											? ` (${formatOwnershipPercent(featuredHoldings, featuredCreator?.creatorShareSupply)})`
+											: ''
+									}`}
+								>
+									{formatNumber(featuredHoldings)} keys
+									{formatOwnershipPercent(
+										featuredHoldings,
+										featuredCreator?.creatorShareSupply
+									) !== '—' && (
+										<span className="ml-2 text-xs font-normal text-white/60">
+											(
+											{formatOwnershipPercent(
+												featuredHoldings,
+												featuredCreator?.creatorShareSupply
+											)}
+											)
+										</span>
+									)}
+								</div>
+							</div>
+							<div className="flex items-center gap-2">
 								<div className="relative">
 									<div
 										className={cn(
-											'hidden md:flex items-center gap-3 transition-opacity duration-200',
-											tradeSubmitting && 'pointer-events-none select-none opacity-60'
+											'flex items-center gap-2 transition-opacity duration-200',
+											tradeSubmitting &&
+												'pointer-events-none select-none opacity-60'
 										)}
 										aria-busy={tradeSubmitting || undefined}
 									>
 										<Button
 											className="rounded-xl"
+											size="sm"
 											onClick={() => openTradeDialog('buy')}
 											disabled={isNetworkMismatch || tradeSubmitting}
 										>
@@ -896,6 +1207,7 @@ function LandingPage() {
 										</Button>
 										<Button
 											className="rounded-xl"
+											size="sm"
 											variant="outline"
 											onClick={() => openTradeDialog('sell')}
 											disabled={isNetworkMismatch || tradeSubmitting}
@@ -904,80 +1216,26 @@ function LandingPage() {
 										</Button>
 									</div>
 									{tradeSubmitting && (
-										<div className="absolute inset-0 hidden items-center justify-center rounded-[1.25rem] border border-white/10 bg-slate-950/65 backdrop-blur-sm md:flex">
-											<div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-1.5 text-xs font-bold text-white/85 shadow-lg">
-												<div className="size-3.5 animate-spin rounded-full border-2 border-amber-400/25 border-t-amber-400" />
+										<div className="absolute inset-0 flex items-center justify-center rounded-xl border border-white/10 bg-slate-950/65 px-3 backdrop-blur-sm">
+											<div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-1.5 text-[11px] font-bold text-white/85 shadow-lg">
+												<div className="size-3 animate-spin rounded-full border-2 border-amber-400/25 border-t-amber-400" />
 												Submitting trade
 											</div>
 										</div>
 									)}
 								</div>
 							</div>
-						</MarketplaceSection>
-					)}
-				</SectionErrorBoundary>
-
-				<div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/85 backdrop-blur-md md:hidden">
-					<div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-3">
-						<div className="min-w-0">
-							<div className="text-xs font-bold uppercase tracking-[0.22em] text-white/40">
-								Your holdings
-							</div>
-							<div
-								className="truncate font-jakarta text-sm font-bold text-white/85"
-								aria-label={`Wallet holdings: ${formatNumber(featuredHoldings)} keys`}
-							>
-								{formatNumber(featuredHoldings)} keys
-							</div>
-						</div>
-						<div className="flex items-center gap-2">
-							<div className="relative">
-								<div
-									className={cn(
-										'flex items-center gap-2 transition-opacity duration-200',
-										tradeSubmitting && 'pointer-events-none select-none opacity-60'
-									)}
-									aria-busy={tradeSubmitting || undefined}
-								>
-									<Button
-										className="rounded-xl"
-										size="sm"
-										onClick={() => openTradeDialog('buy')}
-										disabled={isNetworkMismatch || tradeSubmitting}
-									>
-										Buy
-									</Button>
-									<Button
-										className="rounded-xl"
-										size="sm"
-										variant="outline"
-										onClick={() => openTradeDialog('sell')}
-										disabled={isNetworkMismatch || tradeSubmitting}
-									>
-										Sell
-									</Button>
-								</div>
-								{tradeSubmitting && (
-									<div className="absolute inset-0 flex items-center justify-center rounded-xl border border-white/10 bg-slate-950/65 px-3 backdrop-blur-sm">
-										<div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-1.5 text-[11px] font-bold text-white/85 shadow-lg">
-											<div className="size-3 animate-spin rounded-full border-2 border-amber-400/25 border-t-amber-400" />
-											Submitting trade
-										</div>
-									</div>
-								)}
-							</div>
 						</div>
 					</div>
-				</div>
 
-				<SectionDivider
-					title="Transaction timeline pattern"
-					spacing="relaxed"
-					isEmpty={false}
-				/>
-				<MarketplaceSection spacing="relaxed">
-					<EmptyTransactionTimelineState />
-				</MarketplaceSection>
+					<SectionDivider
+						title="Transaction timeline pattern"
+						spacing="relaxed"
+						isEmpty={false}
+					/>
+					<MarketplaceSection spacing="relaxed">
+						<EmptyTransactionTimelineState />
+					</MarketplaceSection>
 				</main>
 			</div>
 
@@ -986,8 +1244,9 @@ function LandingPage() {
 				side={tradeSide}
 				creatorName="Alex Rivers"
 				availableHoldings={featuredHoldings}
-				keyPriceStroops={resolveCreatorKeyPriceStroops(DEMO_CREATORS[0])}
+				keyPriceStroops={resolveCreatorKeyPriceStroops(featuredCreator)}
 				isSubmitting={tradeSubmitting}
+				networkFeeEstimateProvider={tradeFeeEstimateProvider}
 				onOpenChange={setTradeDialogOpen}
 				onConfirm={handleConfirmTrade}
 			/>
