@@ -18,10 +18,10 @@ export default function Header() {
 
 	return (
 		<header
-			className={`header-animate fixed inset-x-0 top-0 z-50 transition-all duration-300 ${
+			className={`header-animate fixed inset-x-0  z-50 transition-all duration-300 ${
 				scrolled
-					? 'border-b border-black/8 bg-white/80 backdrop-blur-md'
-					: ''
+					? 'border-b border-black/8 bg-white/80 backdrop-blur-md top-0'
+					: 'top-2'
 			}`}
 		>
 			<div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">

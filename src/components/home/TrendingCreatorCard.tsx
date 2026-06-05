@@ -1,20 +1,9 @@
 import makeBlockie from 'ethereum-blockies-base64';
-import { TrendingUp, TrendingDown, Users, ArrowRight } from 'lucide-react';
+import { Users, ArrowRight } from 'lucide-react';
 import { Link } from 'react-router';
 import type { Course } from '@/services/course.service';
 
 type Props = { creator: Course & { walletAddress: string } };
-
-function PriceChange({ change }: { change?: number }) {
-	if (change === undefined) return null;
-	const up = change >= 0;
-	return (
-		<span className={`flex items-center gap-1 font-mono text-[10px] ${up ? 'text-emerald-600' : 'text-red-500'}`}>
-			{up ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
-			{up ? '+' : ''}{change.toFixed(1)}%
-		</span>
-	);
-}
 
 export default function TrendingCreatorCard({ creator }: Props) {
 	const name = creator.title || 'Unnamed creator';
@@ -24,7 +13,7 @@ export default function TrendingCreatorCard({ creator }: Props) {
 		: creator.price.toFixed(2);
 
 	return (
-		<article className="group relative overflow-hidden rounded-2xl border border-black/8 bg-white shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md">
+		<article className="group relative overflow-hidden rounded-2xl border border-black/8 bg-white transition-all duration-300 hover:-translate-y-0.5">
 			{/* Avatar */}
 			<div className="relative h-48 overflow-hidden bg-gray-50">
 				<img
@@ -34,12 +23,6 @@ export default function TrendingCreatorCard({ creator }: Props) {
 					style={{ imageRendering: 'pixelated' }}
 				/>
 
-	
-				{creator.change24h !== undefined && (
-					<div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full border border-black/8 bg-white/90 px-2.5 py-1 shadow-sm backdrop-blur-sm">
-						<PriceChange change={creator.change24h} />
-					</div>
-				)}
 			</div>
 
 			{/* Body */}

@@ -122,7 +122,13 @@ export default function TrendingCreators() {
 	}, []);
 
 	return (
-		<section className="bg-white px-6 py-20">
+		<section
+			className="bg-white px-6 py-20"
+			style={{
+				backgroundImage: 'radial-gradient(circle, #d1d5db 0.75px, transparent 0.75px)',
+				backgroundSize: '22px 22px',
+			}}
+		>
 			<div className="mx-auto max-w-5xl">
 				{/* Header */}
 				<div ref={headingRef} className="scroll-reveal flex items-end justify-between">

@@ -38,6 +38,12 @@ export default function Hero() {
 			{/* Very light tint */}
 			<div className="absolute inset-0 bg-[#04090f]/28" />
 
+			{/* Noise texture */}
+			<div
+				className="pointer-events-none absolute inset-0 opacity-[0.18]"
+				style={{ backgroundImage: 'url(/images/noise.png)', backgroundRepeat: 'repeat' }}
+			/>
+
 			{/* Bottom-to-top fade */}
 			<div
 				className="absolute inset-x-0 bottom-0 h-[45%] backdrop-blur-[150px]"
